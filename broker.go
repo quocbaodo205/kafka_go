@@ -4,56 +4,10 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"strconv"
 )
 
 const BROKER_PORT = 10000
-
-const (
-	ECHO = 1
-	// Other message types
-)
-
-type Message struct {
-	ECHO *string
-	// Other type here...
-}
-
-func readFromStream(stream_rw *bufio.ReadWriter) ([]byte, error) {
-	var err error
-	// Read
-	header, err := stream_rw.ReadByte() // Block
-	if err != nil {
-		return nil, err
-	}
-
-	data, err := stream_rw.Peek(int(header)) // Block
-	if err != nil {
-		return nil, err
-	}
-
-	_, err = stream_rw.Discard(int(header))
-	if err != nil {
-		return nil, err
-	}
-
-	return data, err
-}
-
-func writeToStream(stream_rw *bufio.ReadWriter, data string) error {
-	var err error
-	// Write
-	err = stream_rw.WriteByte(byte(len(data)))
-	if err != nil {
-		return err
-	}
-	_, err = stream_rw.WriteString(data)
-	if err != nil {
-		return err
-	}
-	stream_rw.Flush()
-
-	return nil
-}
 
 type Broker struct {
 }
@@ -68,20 +22,16 @@ func (b *Broker) startBrokerServer() error {
 		stream_rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
 		var err error
-		data, err := readFromStream(stream_rw)
-		if err != nil {
-			return err
-		}
+		parsed_message, err := readMessageFromStream(stream_rw)
 
 		// Process
-		parsed_message := b.parseBrokerMessage(data)
-		if parsed_message != nil {
+		if err == nil && parsed_message != nil {
 			resp, err := b.processBrokerMessage(parsed_message)
 			if err != nil {
 				return err
 			}
 			// Write it back
-			err = writeToStream(stream_rw, resp)
+			err = writeMessageToStream(stream_rw, *resp)
 			if err != nil {
 				return err
 			}
@@ -94,22 +44,57 @@ func (b *Broker) startBrokerServer() error {
 	}
 }
 
-func (b *Broker) parseBrokerMessage(message []byte) *Message {
-	switch message[0] {
-	case ECHO:
-		var st = string(message[1:])
-		return &Message{ECHO: &st}
-	default:
-		return nil
+// Process:
+// - Call inner process function for each message type
+// - Response correct Message
+func (b *Broker) processBrokerMessage(message *Message) (*Message, error) {
+	if message.ECHO != nil {
+		resp, err := b.processEchoMessage(message.ECHO)
+		if err != nil {
+			return nil, err
+		}
+		return &Message{R_ECHO: &resp}, nil
 	}
+	if message.P_REG != nil {
+		resp, err := b.processProducerRegisterMessage(message.P_REG)
+		if err != nil {
+			return nil, err
+		}
+		return &Message{R_P_REG: resp}, nil
+	}
+	return nil, nil
 }
 
-func (b *Broker) processBrokerMessage(message *Message) (string, error) {
-	var err error
-	var resp string
+func (b *Broker) processEchoMessage(echo_message *string) (string, error) {
+	return fmt.Sprintf("I have receiver: %s", *echo_message), nil
+}
 
-	if message.ECHO != nil {
-		resp = fmt.Sprintf("I have receiver: %s", *message.ECHO)
+func (b *Broker) processProducerRegisterMessage(p_reg_message *string) (*byte, error) {
+	port, err := strconv.ParseInt(*p_reg_message, 10, 32)
+	if err != nil {
+		return nil, err
 	}
-	return resp, err
+	go func() {
+		conn, _ := net.Dial("tcp", fmt.Sprintf(":%d", port))
+		fmt.Printf("Connected to server at port %v\n", port)
+		// Read input from stdin and write to stream.
+		stream_rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+		for {
+			parsed_message, err := readMessageFromStream(stream_rw)
+			if parsed_message == nil || err != nil {
+				panic(err)
+			}
+			// Process something here
+			resp, err := b.processBrokerMessage(parsed_message)
+			if err != nil {
+				panic(err)
+			}
+			err = writeMessageToStream(stream_rw, *resp)
+			if err != nil {
+				panic(err)
+			}
+		}
+	}()
+	var resp byte = 0
+	return &resp, err
 }
