@@ -9,24 +9,31 @@ import (
 )
 
 type Producer struct {
+	port     uint16
+	topicID  uint16
 }
 
 // Connect to Broker to send register
-func (b *Producer) sendPortDataToBroker(port int16) error {
+func (p *Producer) sendPortDataToBroker() error {
 	var err error
 	conn, _ := net.Dial("tcp", fmt.Sprintf(":%d", BROKER_PORT))
-	stream_rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
-	port_str := fmt.Sprintf("%d", port)
-	message := Message{
-		P_REG: &port_str,
+	streamRW := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+	
+	pRegMsg := ProducerRegisterMessage{
+		port:    p.port,
+		topicID: p.topicID,
 	}
-	err = writeMessageToStream(stream_rw, message)
+	fmt.Printf("pRegMsg: port=%d, topicID=%d\n", pRegMsg.port, pRegMsg.topicID)
+	message := Message{
+		P_REG: &pRegMsg,
+	}
+	err = writeMessageToStream(streamRW, message)
 	if err != nil {
 		panic(err)
 	}
 
 	// Try to read back from the stream
-	resp, err := readMessageFromStream(stream_rw)
+	resp, err := readMessageFromStream(streamRW)
 	if err != nil {
 		panic(err)
 	}
@@ -35,20 +42,19 @@ func (b *Producer) sendPortDataToBroker(port int16) error {
 	return nil
 }
 
-func (b *Producer) startProducerServer(port int16) error {
+func (p *Producer) startProducerServer() error {
 	var err error
-
-	err = b.sendPortDataToBroker(port)
+	
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", p.port))
 	if err != nil {
 		panic(err)
 	}
-
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	err = p.sendPortDataToBroker()
 	if err != nil {
 		panic(err)
 	}
 	conn, _ := ln.Accept() // Block until can
-	stream_rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+	streamRW := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 	rd := bufio.NewReader(os.Stdin)
 
 	for {
@@ -61,20 +67,20 @@ func (b *Producer) startProducerServer(port int16) error {
 				// Probably panic here
 			}
 		}
-		// Write ECHO
-		err = writeMessageToStream(stream_rw, Message{
-			ECHO: &line,
+		// Write PCM
+		err = writeMessageToStream(streamRW, Message{
+			PCM: []byte(line),
 		})
 		if err != nil {
 			break
 		}
 		// Try to read back from the stream
-		resp, err := readMessageFromStream(stream_rw)
+		resp, err := readMessageFromStream(streamRW)
 		if err != nil {
 			break
 		}
 
-		fmt.Printf("Receive message from broker: %s\n", *resp.R_ECHO)
+		fmt.Printf("Receive R_PCM from broker: %d\n", *resp.R_PCM)
 
 	}
 	err = conn.Close()

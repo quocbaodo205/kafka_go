@@ -4,12 +4,16 @@ import (
 	"bufio"
 	"fmt"
 	"net"
-	"strconv"
 )
 
 const BROKER_PORT = 10000
 
 type Broker struct {
+	topics []Topic
+}
+
+func (b *Broker) init() {
+	b.topics = make([]Topic, 0)
 }
 
 func (b *Broker) startBrokerServer() error {
@@ -19,19 +23,19 @@ func (b *Broker) startBrokerServer() error {
 	}
 	for {
 		conn, _ := ln.Accept() // Block until can
-		stream_rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+		streamRW := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 
 		var err error
-		parsed_message, err := readMessageFromStream(stream_rw)
+		parsedMessage, err := readMessageFromStream(streamRW)
 
 		// Process
-		if err == nil && parsed_message != nil {
-			resp, err := b.processBrokerMessage(parsed_message)
+		if err == nil && parsedMessage != nil {
+			resp, err := b.processBrokerMessage(parsedMessage)
 			if err != nil {
 				return err
 			}
 			// Write it back
-			err = writeMessageToStream(stream_rw, *resp)
+			err = writeMessageToStream(streamRW, *resp)
 			if err != nil {
 				return err
 			}
@@ -56,7 +60,7 @@ func (b *Broker) processBrokerMessage(message *Message) (*Message, error) {
 		return &Message{R_ECHO: &resp}, nil
 	}
 	if message.P_REG != nil {
-		resp, err := b.processProducerRegisterMessage(message.P_REG)
+		resp, err := b.processProducerRegisterMessage(*message.P_REG)
 		if err != nil {
 			return nil, err
 		}
@@ -65,36 +69,56 @@ func (b *Broker) processBrokerMessage(message *Message) (*Message, error) {
 	return nil, nil
 }
 
-func (b *Broker) processEchoMessage(echo_message *string) (string, error) {
-	return fmt.Sprintf("I have receiver: %s", *echo_message), nil
+func (b *Broker) processProducerPCM(pcm []byte, topicIdx int) (byte, error) {
+	b.topics[topicIdx].mq.push(pcm)
+	b.topics[topicIdx].mq.debug()
+	return 0, nil
 }
 
-func (b *Broker) processProducerRegisterMessage(p_reg_message *string) (*byte, error) {
-	port, err := strconv.ParseInt(*p_reg_message, 10, 32)
-	if err != nil {
-		return nil, err
+func (b *Broker) processEchoMessage(echoMessage *string) (string, error) {
+	return fmt.Sprintf("I have receiver: %s", *echoMessage), nil
+}
+
+func (b *Broker) processProducerRegisterMessage(pRegMessage ProducerRegisterMessage) (*byte, error) {
+	fmt.Printf("Broker received pRegMessage: port=%d, topicID=%d\n", pRegMessage.port, pRegMessage.topicID)
+	var topicIdx int = -1
+	for idx, tp := range b.topics {
+		if tp.topicID == pRegMessage.topicID {
+			topicIdx = idx
+			break
+		}
+	}
+	if topicIdx == -1 {
+		tp := Topic{}
+		tp.init(pRegMessage.topicID)
+		b.topics = append(b.topics, tp)
+		topicIdx = len(b.topics) - 1
 	}
 	go func() {
-		conn, _ := net.Dial("tcp", fmt.Sprintf(":%d", port))
-		fmt.Printf("Connected to server at port %v\n", port)
+		conn, _ := net.Dial("tcp", fmt.Sprintf(":%d", pRegMessage.port))
+		fmt.Printf("Connected to server at port %v\n", pRegMessage.port)
 		// Read input from stdin and write to stream.
-		stream_rw := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
+		streamRW := bufio.NewReadWriter(bufio.NewReader(conn), bufio.NewWriter(conn))
 		for {
-			parsed_message, err := readMessageFromStream(stream_rw)
-			if parsed_message == nil || err != nil {
+			parsedMessage, err := readMessageFromStream(streamRW)
+			if parsedMessage == nil || err != nil {
 				panic(err)
 			}
 			// Process something here
-			resp, err := b.processBrokerMessage(parsed_message)
-			if err != nil {
-				panic(err)
-			}
-			err = writeMessageToStream(stream_rw, *resp)
-			if err != nil {
-				panic(err)
+			if parsedMessage.PCM != nil {
+				resp, err := b.processProducerPCM(parsedMessage.PCM, topicIdx)
+				if err != nil {
+					panic(err)
+				}
+				err = writeMessageToStream(streamRW, Message{
+					R_PCM: &resp,
+				})
+				if err != nil {
+					panic(err)
+				}
 			}
 		}
 	}()
 	var resp byte = 0
-	return &resp, err
+	return &resp, nil
 }
