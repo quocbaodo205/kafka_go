@@ -8,20 +8,24 @@ import (
 const (
 	ECHO  = 1
 	P_REG = 2
-	PCM   = 3
+	C_REG = 3
+	PCM   = 4
 	// Response
 	R_ECHO  = 101
 	R_P_REG = 102
-	R_PCM   = 103
+	R_C_REG = 103
+	R_PCM   = 104
 )
 
 type Message struct {
 	ECHO  *string
 	P_REG *ProducerRegisterMessage
+	C_REG *ConsumerRegisterMessage
 	PCM   []byte // nil-able
 	// Response
 	R_ECHO  *string
 	R_P_REG *byte
+	R_C_REG *byte
 	R_PCM   *byte
 }
 
@@ -49,6 +53,38 @@ func (m *ProducerRegisterMessage) toByte() []byte {
 	data[2] = byte(m.topicID >> 8)
 	data[3] = byte(m.topicID % 256)
 	return data[0:4]
+}
+
+type ConsumerRegisterMessage struct {
+	port    uint16
+	topicID uint16
+	groupID uint16
+}
+
+func (m *ConsumerRegisterMessage) fromByte(streamMessage []byte) {
+	// First 2 bytes: port
+	// Next 2 bytes: topicID
+	// Next 2 bytes: groupID
+	m.port = uint16(streamMessage[0])<<8 + uint16(streamMessage[1])
+	m.topicID = uint16(streamMessage[2])<<8 + uint16(streamMessage[3])
+	m.groupID = uint16(streamMessage[4])<<8 + uint16(streamMessage[5])
+}
+
+func (m *ConsumerRegisterMessage) toByte() []byte {
+	var data [6]byte
+	// First 2 bytes: port
+	// Next 2 bytes: topicID
+	// Next 2 bytes: groupID
+
+	data[0] = byte(m.port >> 8)
+	data[1] = byte(m.port % 256)
+
+	data[2] = byte(m.topicID >> 8)
+	data[3] = byte(m.topicID % 256)
+
+	data[4] = byte(m.groupID >> 8)
+	data[5] = byte(m.groupID % 256)
+	return data[0:6]
 }
 
 // Message format:
@@ -90,6 +126,13 @@ func parseMessage(streamMessage []byte) *Message {
 	case R_P_REG:
 		var st = streamMessage[1]
 		return &Message{R_P_REG: &st}
+	case C_REG:
+		p := ConsumerRegisterMessage{}
+		p.fromByte(streamMessage[1:])
+		return &Message{C_REG: &p}
+	case R_C_REG:
+		var st = streamMessage[1]
+		return &Message{R_C_REG: &st}
 	case PCM:
 		return &Message{PCM: streamMessage[1:]}
 	case R_PCM:
@@ -133,7 +176,6 @@ func writeDataToStreamWithType(streamRW *bufio.ReadWriter, mType byte, data stri
 	return nil
 }
 
-// [ 7  1  h e l l o o ]
 func writeMessageToStream(streamRW *bufio.ReadWriter, message Message) error {
 	if message.ECHO != nil {
 		if err := writeDataToStreamWithType(streamRW, ECHO, *message.ECHO); err != nil {
@@ -153,6 +195,18 @@ func writeMessageToStream(streamRW *bufio.ReadWriter, message Message) error {
 	if message.R_P_REG != nil {
 		data := fmt.Sprintf("%d", *message.R_P_REG)
 		if err := writeDataToStreamWithType(streamRW, R_P_REG, data); err != nil {
+			return err
+		}
+	}
+	if message.C_REG != nil {
+		data := string(message.C_REG.toByte())
+		if err := writeDataToStreamWithType(streamRW, C_REG, data); err != nil {
+			return err
+		}
+	}
+	if message.R_C_REG != nil {
+		data := fmt.Sprintf("%d", *message.R_C_REG)
+		if err := writeDataToStreamWithType(streamRW, R_C_REG, data); err != nil {
 			return err
 		}
 	}

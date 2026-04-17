@@ -29,10 +29,30 @@ func main() {
 			panic(err)
 		}
 		producer := Producer{
-			port:     uint16(port),
-			topicID:  uint16(topicID),
+			port:    uint16(port),
+			topicID: uint16(topicID),
 		}
 		producer.startProducerServer()
+	} else if os.Args[1] == "consumer" {
+		fmt.Println("Trying to start consumer processes")
+		port, err := strconv.ParseInt(os.Args[2], 10, 16)
+		if err != nil {
+			panic(err)
+		}
+		topicID, err := strconv.ParseInt(os.Args[3], 10, 16)
+		if err != nil {
+			panic(err)
+		}
+		groupID, err := strconv.ParseInt(os.Args[4], 10, 16)
+		if err != nil {
+			panic(err)
+		}
+		consumer := Consumer{
+			port:    uint16(port),
+			topicID: uint16(topicID),
+			groupID: uint16(groupID),
+		}
+		consumer.startConsumerServer()
 	} else {
 		clientConnectTCPAndEcho(10000)
 	}
