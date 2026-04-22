@@ -198,7 +198,7 @@ func (b *Broker) processConsumerRegisterMessage(cRegMessage ConsumerRegisterMess
 		topic.cgroups = append(topic.cgroups, cg)
 		topic.lock.Unlock()
 		cgroup = cg
-		go b.startConsumerGroupConsumption(topic, cgroup)
+		// go b.startConsumerGroupConsumption(topic, cgroup)
 	}
 	conn, _ := net.Dial("tcp", fmt.Sprintf(":%d", cRegMessage.port))
 	fmt.Printf("Connected to consumer at port %v\n", cRegMessage.port)
@@ -206,15 +206,32 @@ func (b *Broker) processConsumerRegisterMessage(cRegMessage ConsumerRegisterMess
 		status: true,
 		conn:   conn,
 	}
+	cgroup.lock.Lock()
 	cgroup.consumers = append(cgroup.consumers, consumer)
+	fmt.Printf("Pushed to the list of consumer, port %v\n", cRegMessage.port)
+	cgroup.lock.Unlock()
+	// go b.readConsumerReady(cgroup, &consumer)
+	go b.readConsumerReadyAndSend(topic, cgroup, &consumer)
 	var resp byte = 0
 	return &resp, nil
 }
 
-func (b *Broker) startConsumerGroupConsumption(topic *Topic, cgroup *CGroup) {
-	var err error
-	fmt.Printf("Starting consumer group process, topicID = %d, groupID = %d\n", topic.topicID, cgroup.groupID)
+func (b *Broker) readConsumerReadyAndSend(topic *Topic, cgroup *CGroup, consumerConn *ConsumerConn) {
+	streamRW := bufio.NewReadWriter(bufio.NewReader(consumerConn.conn), bufio.NewWriter(consumerConn.conn))
+
 	for {
+		// Read ack
+		parsedMessage, err := readMessageFromStream(streamRW) // Wait forever!!
+		if parsedMessage == nil || err != nil {
+			panic(err)
+		}
+		if parsedMessage.R_PCM != nil {
+			consumerConn.status = true
+		} else {
+			fmt.Printf("Parsed message not R_PCM: %v", parsedMessage)
+			panic("Why not R_PCM???")
+		}
+
 		cgroup.lock.Lock()
 		offset := cgroup.offset
 		// Take message from topic for consumption
@@ -226,36 +243,17 @@ func (b *Broker) startConsumerGroupConsumption(topic *Topic, cgroup *CGroup) {
 			continue
 		}
 
-		for i := range cgroup.consumers {
-			consumer := &cgroup.consumers[i]
-			if consumer.status {
-				// Read input from stdin and write to stream.
-				streamRW := bufio.NewReadWriter(bufio.NewReader(consumer.conn), bufio.NewWriter(consumer.conn))
-
-				// Write PCM message to ready consumer
-				consumer.status = false
-				err = writeMessageToStream(streamRW, Message{
-					PCM: pcm,
-				})
-				if err != nil {
-					panic(err)
-				}
-
-				// Read ack
-				parsedMessage, err := readMessageFromStream(streamRW) // Wait forever!!
-				if parsedMessage == nil || err != nil {
-					panic(err)
-				}
-				if parsedMessage.R_PCM != nil {
-					consumer.status = true
-				}
-
-				// Increase offset on consumed
-				cgroup.offset += 1
-			} else {
-				fmt.Printf("No consumer is ready, size = %d\n", len(cgroup.consumers))
-			}
+		// Write PCM message to ready consumer
+		consumerConn.status = false
+		err = writeMessageToStream(streamRW, Message{
+			PCM: pcm,
+		})
+		if err != nil {
+			panic(err)
 		}
+
+		// Increase offset on consumed
+		cgroup.offset += 1
 		cgroup.lock.Unlock()
 	}
 }

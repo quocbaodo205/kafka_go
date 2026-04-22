@@ -60,14 +60,7 @@ func (c *Consumer) startConsumerServer() error {
 	fmt.Printf("Started consumer server, receiving...\n")
 
 	for {
-		// Read message to consume
-		message, err := readMessageFromStream(streamRW)
-		if err != nil {
-			break
-		}
-		fmt.Printf("Receive PCM from broker: %s\n", message.PCM)
-		time.Sleep(1 * time.Second)
-		// Write R_PCM
+		// Write R_PCM (Ready message)
 		var resp byte = 1
 		err = writeMessageToStream(streamRW, Message{
 			R_PCM: &resp,
@@ -75,6 +68,14 @@ func (c *Consumer) startConsumerServer() error {
 		if err != nil {
 			break
 		}
+		// Read message to consume
+		message, err := readMessageFromStream(streamRW)
+		if err != nil {
+			break
+		}
+		fmt.Printf("Receive PCM from broker: %s\n", message.PCM)
+		time.Sleep(2 * time.Second)
+		// TODO: Do something with the message
 	}
 	err = conn.Close()
 	if err != nil {

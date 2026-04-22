@@ -10,6 +10,8 @@ type CGroup struct {
 	offset    uint
 	consumers []ConsumerConn
 	lock      sync.Mutex
+
+	readyConsumers []*ConsumerConn
 }
 
 type ConsumerConn struct {
