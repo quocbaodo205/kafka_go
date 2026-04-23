@@ -58,6 +58,14 @@ func (q *Queue) peek(offset uint) []byte {
 	return data
 }
 
+func (q *Queue) size() int {
+	if q.tail >= q.head {
+		return int((q.tail - q.head) / maxMessageSize)
+	} else {
+		return int(((maxMessageSize*queueCapacity - q.head) + q.tail) / maxMessageSize)
+	}
+}
+
 func (q *Queue) debug() {
 	fmt.Printf("Debug queue: \n")
 	var cur = q.head
