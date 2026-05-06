@@ -7,7 +7,7 @@ type Partition struct {
 	lock  sync.Mutex
 }
 
-func (p *Partition) init() {
+func (p *Partition) init(topic_id, cgroup_id, partition_id uint16) {
 	p.queue = Queue{}
-	p.queue.init()
+	p.queue.init(topic_id, cgroup_id, partition_id)
 }

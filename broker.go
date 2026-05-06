@@ -4,16 +4,41 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"os"
 )
 
 const BROKER_PORT = 10000
 
 type Broker struct {
-	topics []*Topic
+	topics   []*Topic
+	metaFile *os.File
 }
 
 func (b *Broker) init() {
-	b.topics = make([]*Topic, 0)
+	var err error
+	b.metaFile, err = os.OpenFile("broker_metadata.dat", os.O_RDWR|os.O_CREATE, 0666)
+	if err != nil {
+		panic(err)
+	}
+
+	size := int(readu32(b.metaFile, 0))
+	b.topics = make([]*Topic, 0, size)
+	for i := 0; i < size; i += 1 {
+		topicID := readu16(b.metaFile, int64(4+i*2))
+		tp := &Topic{}
+		tp.init(topicID)
+		b.topics = append(b.topics, tp)
+	}
+	fmt.Printf("debug metadata file name = %s: topics = %d\n", b.metaFile.Name(), size)
+
+}
+
+func (b *Broker) store() {
+	writeu32(b.metaFile, 0, uint32(len(b.topics)))
+	for i, topic := range b.topics {
+		writeu16(b.metaFile, int64(4+i*2), topic.topicID)
+	}
+	fmt.Printf("debug metadata file name = %s: topics = %d\n", b.metaFile.Name(), len(b.topics))
 }
 
 func (b *Broker) startBrokerServer() error {
@@ -133,6 +158,7 @@ func (b *Broker) processProducerRegisterMessage(pRegMessage ProducerRegisterMess
 		tp := &Topic{}
 		tp.init(pRegMessage.topicID)
 		b.topics = append(b.topics, tp)
+		b.store()
 		topic = tp
 	}
 	go func() {
@@ -177,6 +203,7 @@ func (b *Broker) processConsumerRegisterMessage(cRegMessage ConsumerRegisterMess
 		tp := &Topic{}
 		tp.init(cRegMessage.topicID)
 		b.topics = append(b.topics, tp)
+		b.store()
 		topic = tp
 	}
 	var cgroup *CGroup
@@ -187,19 +214,22 @@ func (b *Broker) processConsumerRegisterMessage(cRegMessage ConsumerRegisterMess
 		}
 	}
 	if cgroup == nil {
-		cg := &CGroup{
-			groupID: cRegMessage.groupID,
-		}
+		cg := &CGroup{}
+		cg.init(topic.topicID, cRegMessage.groupID) // init with file
 		topic.lock.Lock()
 		topic.cgroups = append(topic.cgroups, cg)
+		topic.store()
 		topic.lock.Unlock()
 		cgroup = cg
 		// Initialize first partition
-		partition := Partition{}
-		partition.init()
-		cgroup.lock.Lock()
-		cgroup.partitions = append(cgroup.partitions, partition)
-		cgroup.lock.Unlock()
+		if len(cgroup.partitions) == 0 {
+			partition := Partition{}
+			partition.init(topic.topicID, cgroup.groupID, 1)
+			cgroup.lock.Lock()
+			cgroup.partitions = append(cgroup.partitions, partition)
+			cgroup.store()
+			cgroup.lock.Unlock()
+		}
 	}
 	conn, _ := net.Dial("tcp", fmt.Sprintf(":%d", cRegMessage.port))
 	fmt.Printf("Connected to consumer at port %v\n", cRegMessage.port)
@@ -211,8 +241,9 @@ func (b *Broker) processConsumerRegisterMessage(cRegMessage ConsumerRegisterMess
 	cgroup.consumers = append(cgroup.consumers, consumer)
 	if len(cgroup.partitions) < len(cgroup.consumers) {
 		partition := Partition{}
-		partition.init()
+		partition.init(topic.topicID, cgroup.groupID, uint16(len(cgroup.partitions)+1))
 		cgroup.partitions = append(cgroup.partitions, partition)
+		cgroup.store()
 	}
 	fmt.Printf("Pushed to the list of consumer, port %v, partition %d\n", cRegMessage.port, len(cgroup.partitions)-1)
 	partitionIdx := len(cgroup.partitions) - 1
